@@ -392,12 +392,28 @@ function exportCSV() {
   a.click();
 }
 
-function exportGS() {
-  exportCSV();
-  setTimeout(() => {
-    window.open('https://sheets.new','_blank');
-    alert('Dans Google Sheets :\n1. Fichier → Importer\n2. Sélectionne le CSV téléchargé\n3. Importer les données');
-  }, 600);
+async function exportGS() {
+  if (!results || results.length === 0) { alert('Lance une recherche d\'abord !'); return; }
+  const btn = document.querySelector('.btn-blue');
+  btn.textContent = '⏳ Création en cours...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/sheets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profiles: results })
+    });
+    const data = await r.json();
+    if (data.url) {
+      window.open(data.url, '_blank');
+    } else {
+      alert('Erreur: ' + (data.error || 'Inconnue'));
+    }
+  } catch(e) {
+    alert('Erreur: ' + e.message);
+  }
+  btn.textContent = '📋 Google Sheets';
+  btn.disabled = false;
 }
 </script>
 </body>
