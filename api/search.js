@@ -5,124 +5,103 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-  const HOST = 'instagram-scraper-stable-api.p.rapidapi.com';
-
-  // Ces 3 comptes sont nos sources — on prend leurs followers
-  const sourceAccounts = ['billstrading', 'intersoldi_', 'leplussimple_trading'];
+  const APIFY_KEY = process.env.APIFY_KEY;
   const { count = 30, needTelegram = true } = req.body || {};
 
-  const allProfiles = [];
-  const seen = new Set();
+  if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
-  for (const account of sourceAccounts) {
-    if (allProfiles.length >= count * 3) break;
+  const hashtags = ['trading', 'forextrader', 'daytrader', 'tradingforex', 'cryptotrader', 'fundedtrader', 'tradingfrance', 'tradingespana', 'tradingitalia'];
 
-    try {
-      // Get followers of this account
-      const r = await fetch(`https://${HOST}/get_ig_user_followers_v2.php`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'x-rapidapi-key': RAPIDAPI_KEY,
-          'x-rapidapi-host': HOST
-        },
-        body: `username_or_url=https://www.instagram.com/${account}/&data=following&amount=50`
+  try {
+    // Start Apify run
+    const runRes = await fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${APIFY_KEY}`
+      },
+      body: JSON.stringify({
+        hashtags: hashtags.slice(0, 5),
+        resultsLimit: count * 5,
+        proxy: { useApifyProxy: true }
+      })
+    });
+
+    if (!runRes.ok) {
+      const err = await runRes.json();
+      throw new Error(err.error?.message || 'Erreur Apify: ' + runRes.status);
+    }
+
+    const runData = await runRes.json();
+    const runId = runData.data.id;
+
+    // Wait for completion
+    let status = 'RUNNING';
+    let attempts = 0;
+    while (status === 'RUNNING' && attempts < 40) {
+      await new Promise(r => setTimeout(r, 3000));
+      attempts++;
+      const statusRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
+        headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
+      });
+      const statusData = await statusRes.json();
+      status = statusData.data.status;
+    }
+
+    if (status !== 'SUCCEEDED') throw new Error('Run Apify échoué: ' + status);
+
+    // Get results
+    const dataRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=300`, {
+      headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
+    });
+    const items = await dataRes.json();
+
+    // Extract unique profiles
+    const seen = new Set();
+    const profiles = [];
+
+    for (const item of items) {
+      const username = item.ownerUsername || item.owner?.username;
+      if (!username || seen.has(username)) continue;
+      seen.add(username);
+
+      const followers = item.ownerFollowersCount || item.owner?.followersCount || 0;
+      if (followers < 1000) continue;
+
+      const bio = item.ownerBiography || item.owner?.biography || '';
+      const bioLow = bio.toLowerCase();
+
+      if (needTelegram && !bioLow.includes('t.me') && !bioLow.includes('telegram')) continue;
+
+      const tgMatch = bio.match(/t\.me\/[\w]+/i);
+      let score = 50;
+      if (tgMatch) score += 25;
+      if (followers > 10000) score += 10;
+      if (followers > 50000) score += 10;
+      if (bioLow.includes('xfunded') || bioLow.includes('ftmo') || bioLow.includes('funded')) score += 10;
+      score = Math.min(score, 99);
+
+      profiles.push({
+        username,
+        fullName: item.ownerFullName || '',
+        followers,
+        country: detectCountry(bioLow),
+        hasTelegram: !!(tgMatch || bioLow.includes('telegram')),
+        telegramLink: tgMatch ? tgMatch[0] : null,
+        hasReels: true,
+        score
       });
 
-      const data = await r.json();
-      const users = data?.data?.followers || data?.followers || data?.users || data?.data || [];
-
-      for (const u of (Array.isArray(users) ? users : [])) {
-        const username = u.username || u.user?.username;
-        if (!username || seen.has(username)) continue;
-        seen.add(username);
-
-        const followers = u.follower_count || u.followers || u.edge_followed_by?.count || 0;
-        if (followers < 1000) continue;
-
-        const bio = u.biography || u.bio || '';
-        const bioLow = bio.toLowerCase();
-
-        if (needTelegram) {
-          if (!bioLow.includes('t.me') && !bioLow.includes('telegram')) continue;
-        }
-
-        const tgMatch = bio.match(/t\.me\/[\w]+/i);
-        const tgLink = tgMatch ? tgMatch[0] : null;
-
-        let score = 50;
-        if (tgLink) score += 25;
-        if (followers > 10000) score += 10;
-        if (followers > 50000) score += 10;
-        if (u.is_verified) score += 10;
-        if (bioLow.includes('xfunded') || bioLow.includes('ftmo') || bioLow.includes('funded')) score += 10;
-        score = Math.min(score, 99);
-
-        allProfiles.push({
-          username,
-          fullName: u.full_name || u.name || '',
-          followers,
-          country: detectCountry(bioLow),
-          hasTelegram: !!(tgLink || bioLow.includes('telegram')),
-          telegramLink: tgLink,
-          hasReels: true,
-          score,
-          source: `@${account}`
-        });
-      }
-    } catch(e) {
-      console.error(`Error for ${account}:`, e.message);
+      if (profiles.length >= count) break;
     }
 
-    await new Promise(r => setTimeout(r, 500));
-  }
+    profiles.sort((a, b) => b.score - a.score);
+    return res.status(200).json({ profiles, total: profiles.length });
 
-  // Si pas assez via followers, on essaie la recherche directe
-  if (allProfiles.length < 5) {
-    const queries = ['trading forex', 'day trader', 'trader forex france', 'crypto trader', 'funded trader'];
-    for (const q of queries) {
-      if (allProfiles.length >= count) break;
-      try {
-        const r = await fetch(`https://${HOST}/search_users_and_hashtags/?query=${encodeURIComponent(q)}&count=20`, {
-          headers: {
-            'x-rapidapi-key': RAPIDAPI_KEY,
-            'x-rapidapi-host': HOST
-          }
-        });
-        const data = await r.json();
-        const users = data?.users || data?.data?.users || [];
-        for (const u of users) {
-          const username = u.username;
-          if (!username || seen.has(username)) continue;
-          seen.add(username);
-          const followers = u.follower_count || 0;
-          if (followers < 1000) continue;
-          const bio = u.biography || '';
-          const bioLow = bio.toLowerCase();
-          const tgMatch = bio.match(/t\.me\/[\w]+/i);
-          let score = 60;
-          if (tgMatch) score += 20;
-          if (followers > 10000) score += 10;
-          allProfiles.push({
-            username,
-            fullName: u.full_name || '',
-            followers,
-            country: detectCountry(bioLow),
-            hasTelegram: !!tgMatch,
-            telegramLink: tgMatch ? tgMatch[0] : null,
-            hasReels: true,
-            score: Math.min(score, 99),
-            source: 'recherche'
-          });
-        }
-      } catch(e) {}
-      await new Promise(r => setTimeout(r, 300));
-    }
+  } catch(err) {
+    console.error(err);
+    return res.status(500).json({ error: err.message });
   }
-
-  const sorted = allProfiles.sort((a, b) => b.score - a.score).slice(0, count);
-  return res.status(200).json({ profiles: sorted, total: sorted.length });
 }
 
 function detectCountry(bio) {
