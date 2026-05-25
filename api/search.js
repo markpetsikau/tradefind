@@ -10,58 +10,47 @@ export default async function handler(req, res) {
   if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
   try {
-    const runRes = await fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
-      body: JSON.stringify({
-        hashtags: ['trading', 'forextrader', 'daytrader', 'tradingforex', 'fundedtrader'],
-        resultsLimit: 150,
-        proxy: { useApifyProxy: true }
-      })
-    });
+    // Get results from the LAST successful run directly — no waiting
+    const dataRes = await fetch(
+      `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/last/dataset/items?limit=500&status=SUCCEEDED`,
+      { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
+    );
 
-    const runData = await runRes.json();
-    const runId = runData.data?.id;
-    if (!runId) throw new Error('Pas de run ID');
-
-    let status = 'RUNNING';
-    let attempts = 0;
-    while (status === 'RUNNING' && attempts < 40) {
-      await new Promise(r => setTimeout(r, 3000));
-      attempts++;
-      const s = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
-        headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
-      });
-      status = (await s.json()).data?.status || 'FAILED';
-    }
-
-    if (status !== 'SUCCEEDED') throw new Error('Run échoué: ' + status);
-
-    const dataRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`, {
-      headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
-    });
+    if (!dataRes.ok) throw new Error('Impossible de récupérer les données: ' + dataRes.status);
 
     const items = await dataRes.json();
-    const arr = Array.isArray(items) ? items : Object.values(items || {});
+    const arr = Array.isArray(items) ? items : [];
 
-    // Deduplicate by username
+    if (arr.length === 0) {
+      // Launch a new run in background and return message
+      fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
+        body: JSON.stringify({
+          hashtags: ['trading', 'forextrader', 'daytrader', 'fundedtrader', 'tradingforex'],
+          resultsLimit: 150,
+          proxy: { useApifyProxy: true }
+        })
+      }).catch(() => {});
+
+      return res.status(200).json({
+        profiles: [],
+        total: 0,
+        message: 'Première recherche en cours (2-3 min) — relance dans quelques minutes'
+      });
+    }
+
+    // Process results
     const seen = new Set();
     const profiles = [];
 
     for (const item of arr) {
       if (!item) continue;
-
-      // Apify hashtag scraper returns posts — extract owner info
       const username = item.ownerUsername || item.owner?.username;
       const fullName = item.ownerFullName || item.owner?.fullName || '';
-
       if (!username || seen.has(username)) continue;
       seen.add(username);
 
-      // Get post URL to link to profile
-      const postUrl = item.url || item.shortCode ? `https://www.instagram.com/p/${item.shortCode}/` : '';
-
-      // Extract telegram from caption
       const caption = item.caption || item.text || '';
       const captionLow = caption.toLowerCase();
       const tgMatch = caption.match(/t\.me\/[\w]+/i);
@@ -70,23 +59,33 @@ export default async function handler(req, res) {
       let score = 60;
       if (hasTg) score += 20;
       if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded')) score += 15;
-      if (captionLow.includes('signal') || captionLow.includes('formation') || captionLow.includes('cours')) score += 5;
+      if (captionLow.includes('signal') || captionLow.includes('formation')) score += 5;
       score = Math.min(score, 99);
 
       profiles.push({
         username,
         fullName,
-        followers: 0, // not available from hashtag scraper
+        followers: item.ownerFollowersCount || 0,
         country: detectCountry(captionLow + ' ' + fullName.toLowerCase()),
         hasTelegram: hasTg,
         telegramLink: tgMatch ? tgMatch[0] : null,
         hasReels: true,
-        score,
-        profileUrl: `https://www.instagram.com/${username}/`
+        score
       });
 
       if (profiles.length >= count) break;
     }
+
+    // Also launch new run in background to refresh data
+    fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
+      body: JSON.stringify({
+        hashtags: ['trading', 'forextrader', 'daytrader', 'fundedtrader', 'tradingforex'],
+        resultsLimit: 150,
+        proxy: { useApifyProxy: true }
+      })
+    }).catch(() => {});
 
     profiles.sort((a, b) => b.score - a.score);
     return res.status(200).json({ profiles, total: profiles.length });
@@ -99,8 +98,8 @@ export default async function handler(req, res) {
 
 function detectCountry(text) {
   if (text.includes('france') || text.includes('français') || text.includes('paris')) return '🇫🇷';
-  if (text.includes('españa') || text.includes('madrid') || text.includes('barcelona') || text.includes('español')) return '🇪🇸';
-  if (text.includes('italia') || text.includes('rome') || text.includes('milan') || text.includes('italiano')) return '🇮🇹';
+  if (text.includes('españa') || text.includes('madrid') || text.includes('español')) return '🇪🇸';
+  if (text.includes('italia') || text.includes('milan') || text.includes('italiano')) return '🇮🇹';
   if (text.includes('uk') || text.includes('london') || text.includes('england')) return '🇬🇧';
   if (text.includes('maroc') || text.includes('morocco')) return '🇲🇦';
   if (text.includes('algerie') || text.includes('algeria')) return '🇩🇿';
