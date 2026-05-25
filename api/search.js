@@ -6,11 +6,9 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const APIFY_KEY = process.env.APIFY_KEY;
-  const { count = 30, needTelegram = true } = req.body || {};
+  const { count = 30 } = req.body || {};
 
   if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
-
-  const hashtags = ['trading', 'forextrader', 'daytrader', 'tradingforex', 'fundedtrader'];
 
   try {
     // Start Apify run
@@ -21,56 +19,40 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${APIFY_KEY}`
       },
       body: JSON.stringify({
-        hashtags: hashtags,
-        resultsLimit: 100,
+        hashtags: ['trading', 'forextrader', 'daytrader', 'tradingforex', 'fundedtrader'],
+        resultsLimit: 150,
         proxy: { useApifyProxy: true }
       })
     });
 
-    if (!runRes.ok) {
-      const err = await runRes.json();
-      throw new Error('Erreur Apify run: ' + runRes.status);
-    }
-
     const runData = await runRes.json();
     const runId = runData.data?.id;
-    if (!runId) throw new Error('Pas de run ID');
+    if (!runId) throw new Error('Pas de run ID Apify');
 
-    // Wait for completion max 2 minutes
+    // Wait for completion
     let status = 'RUNNING';
     let attempts = 0;
     while (status === 'RUNNING' && attempts < 40) {
       await new Promise(r => setTimeout(r, 3000));
       attempts++;
-      const statusRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
+      const s = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
         headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
       });
-      const statusData = await statusRes.json();
-      status = statusData.data?.status || 'FAILED';
+      const sd = await s.json();
+      status = sd.data?.status || 'FAILED';
     }
 
     if (status !== 'SUCCEEDED') throw new Error('Run échoué: ' + status);
 
-    // Get dataset items
+    // Get results
     const dataRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`, {
       headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
     });
 
     const rawData = await dataRes.json();
+    const items = Array.isArray(rawData) ? rawData : (rawData?.items || rawData?.data || Object.values(rawData || {}));
 
-    // Handle all possible formats
-    let items = [];
-    if (Array.isArray(rawData)) {
-      items = rawData;
-    } else if (rawData?.items && Array.isArray(rawData.items)) {
-      items = rawData.items;
-    } else if (rawData?.data && Array.isArray(rawData.data)) {
-      items = rawData.data;
-    } else {
-      items = Object.values(rawData || {});
-    }
-
-    // Extract unique profiles
+    // Extract unique profiles - NO telegram filter, show all traders
     const seen = new Set();
     const profiles = [];
 
@@ -81,20 +63,20 @@ export default async function handler(req, res) {
       if (!username || seen.has(username)) continue;
       seen.add(username);
 
-      const followers = item.ownerFollowersCount || item.owner?.followersCount || item.followersCount || item.edge_followed_by?.count || 0;
+      const followers = item.ownerFollowersCount || item.owner?.followersCount || item.followersCount || 0;
       if (followers < 1000) continue;
 
       const bio = item.ownerBiography || item.owner?.biography || item.biography || '';
       const bioLow = bio.toLowerCase();
-
-      if (needTelegram && !bioLow.includes('t.me') && !bioLow.includes('telegram')) continue;
-
       const tgMatch = bio.match(/t\.me\/[\w]+/i);
+      const hasTg = !!(tgMatch || bioLow.includes('telegram'));
+
       let score = 50;
-      if (tgMatch) score += 25;
+      if (hasTg) score += 25;
       if (followers > 10000) score += 10;
       if (followers > 50000) score += 10;
       if (bioLow.includes('xfunded') || bioLow.includes('ftmo') || bioLow.includes('funded')) score += 10;
+      if (bioLow.includes('signal') || bioLow.includes('cours') || bioLow.includes('formation')) score += 5;
       score = Math.min(score, 99);
 
       profiles.push({
@@ -102,7 +84,7 @@ export default async function handler(req, res) {
         fullName: item.ownerFullName || item.owner?.fullName || item.fullName || '',
         followers,
         country: detectCountry(bioLow),
-        hasTelegram: !!(tgMatch || bioLow.includes('telegram')),
+        hasTelegram: hasTg,
         telegramLink: tgMatch ? tgMatch[0] : null,
         hasReels: true,
         score
