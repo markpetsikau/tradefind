@@ -394,26 +394,22 @@ function exportCSV() {
 
 async function exportGS() {
   if (!results || results.length === 0) { alert('Lance une recherche d\'abord !'); return; }
-  const btn = document.querySelector('.btn-blue');
-  btn.textContent = '⏳ Création en cours...';
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/sheets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profiles: results })
-    });
-    const data = await r.json();
-    if (data.url) {
-      window.open(data.url, '_blank');
-    } else {
-      alert('Erreur: ' + (data.error || 'Inconnue'));
-    }
-  } catch(e) {
-    alert('Erreur: ' + e.message);
-  }
-  btn.textContent = '📋 Google Sheets';
-  btn.disabled = false;
+  const headers = ['Username','Nom complet','Abonnés','Pays','Telegram','Lien Telegram','Reels','Score XFunded','Lien Instagram'];
+  const rows = results.map(r => [
+    '@'+r.username,
+    r.fullName||'',
+    r.followers||0,
+    r.country||'',
+    r.hasTelegram?'Oui':'Non',
+    r.telegramLink?'https://'+r.telegramLink:'',
+    r.hasReels?'Oui':'Non',
+    r.score||0,
+    'https://www.instagram.com/'+r.username+'/'
+  ]);
+  const tsv = [headers,...rows].map(r=>r.join('\t')).join('\n');
+  await navigator.clipboard.writeText(tsv);
+  window.open('https://sheets.new','_blank');
+  setTimeout(() => alert('✅ Données copiées !\n\nDans Google Sheets :\n1. Clique sur la cellule A1\n2. Colle avec Ctrl+V\nC\'est tout ! 🎉'), 1000);
 }
 </script>
 </body>
