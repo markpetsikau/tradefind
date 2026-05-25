@@ -27,7 +27,7 @@ export default async function handler(req, res) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
         body: JSON.stringify({
-          hashtags: ['trading', 'forextrader', 'daytrader', 'fundedtrader', 'tradingforex'],
+          hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'apextrader', 'propfirmtrader', 'fundedaccount', 'tradingchallenge', 'myfundedtrader', 'e8funding'],
           resultsLimit: 150,
           proxy: { useApifyProxy: true }
         })
@@ -81,7 +81,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
       body: JSON.stringify({
-        hashtags: ['trading', 'forextrader', 'daytrader', 'fundedtrader', 'tradingforex'],
+        hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'apextrader', 'propfirmtrader', 'fundedaccount', 'tradingchallenge', 'myfundedtrader', 'e8funding'],
         resultsLimit: 150,
         proxy: { useApifyProxy: true }
       })
