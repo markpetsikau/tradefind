@@ -7,17 +7,12 @@ export default async function handler(req, res) {
 
   const APIFY_KEY = process.env.APIFY_KEY;
   const { count = 30 } = req.body || {};
-
   if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
   try {
-    // Start Apify run
     const runRes = await fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${APIFY_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
       body: JSON.stringify({
         hashtags: ['trading', 'forextrader', 'daytrader', 'tradingforex', 'fundedtrader'],
         resultsLimit: 150,
@@ -27,9 +22,8 @@ export default async function handler(req, res) {
 
     const runData = await runRes.json();
     const runId = runData.data?.id;
-    if (!runId) throw new Error('Pas de run ID Apify');
+    if (!runId) throw new Error('Pas de run ID');
 
-    // Wait for completion
     let status = 'RUNNING';
     let attempts = 0;
     while (status === 'RUNNING' && attempts < 40) {
@@ -38,56 +32,57 @@ export default async function handler(req, res) {
       const s = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
         headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
       });
-      const sd = await s.json();
-      status = sd.data?.status || 'FAILED';
+      status = (await s.json()).data?.status || 'FAILED';
     }
 
     if (status !== 'SUCCEEDED') throw new Error('Run échoué: ' + status);
 
-    // Get results
     const dataRes = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`, {
       headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
     });
 
-    const rawData = await dataRes.json();
-    const items = Array.isArray(rawData) ? rawData : (rawData?.items || rawData?.data || Object.values(rawData || {}));
+    const items = await dataRes.json();
+    const arr = Array.isArray(items) ? items : Object.values(items || {});
 
-    // Extract unique profiles - NO telegram filter, show all traders
+    // Deduplicate by username
     const seen = new Set();
     const profiles = [];
 
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue;
+    for (const item of arr) {
+      if (!item) continue;
 
-      const username = item.ownerUsername || item.owner?.username || item.username;
+      // Apify hashtag scraper returns posts — extract owner info
+      const username = item.ownerUsername || item.owner?.username;
+      const fullName = item.ownerFullName || item.owner?.fullName || '';
+
       if (!username || seen.has(username)) continue;
       seen.add(username);
 
-      const followers = item.ownerFollowersCount || item.owner?.followersCount || item.followersCount || 0;
-      if (followers < 1000) continue;
+      // Get post URL to link to profile
+      const postUrl = item.url || item.shortCode ? `https://www.instagram.com/p/${item.shortCode}/` : '';
 
-      const bio = item.ownerBiography || item.owner?.biography || item.biography || '';
-      const bioLow = bio.toLowerCase();
-      const tgMatch = bio.match(/t\.me\/[\w]+/i);
-      const hasTg = !!(tgMatch || bioLow.includes('telegram'));
+      // Extract telegram from caption
+      const caption = item.caption || item.text || '';
+      const captionLow = caption.toLowerCase();
+      const tgMatch = caption.match(/t\.me\/[\w]+/i);
+      const hasTg = !!(tgMatch || captionLow.includes('telegram'));
 
-      let score = 50;
-      if (hasTg) score += 25;
-      if (followers > 10000) score += 10;
-      if (followers > 50000) score += 10;
-      if (bioLow.includes('xfunded') || bioLow.includes('ftmo') || bioLow.includes('funded')) score += 10;
-      if (bioLow.includes('signal') || bioLow.includes('cours') || bioLow.includes('formation')) score += 5;
+      let score = 60;
+      if (hasTg) score += 20;
+      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded')) score += 15;
+      if (captionLow.includes('signal') || captionLow.includes('formation') || captionLow.includes('cours')) score += 5;
       score = Math.min(score, 99);
 
       profiles.push({
         username,
-        fullName: item.ownerFullName || item.owner?.fullName || item.fullName || '',
-        followers,
-        country: detectCountry(bioLow),
+        fullName,
+        followers: 0, // not available from hashtag scraper
+        country: detectCountry(captionLow + ' ' + fullName.toLowerCase()),
         hasTelegram: hasTg,
         telegramLink: tgMatch ? tgMatch[0] : null,
         hasReels: true,
-        score
+        score,
+        profileUrl: `https://www.instagram.com/${username}/`
       });
 
       if (profiles.length >= count) break;
@@ -97,17 +92,17 @@ export default async function handler(req, res) {
     return res.status(200).json({ profiles, total: profiles.length });
 
   } catch(err) {
-    console.error('Error:', err.message);
+    console.error(err.message);
     return res.status(500).json({ error: err.message });
   }
 }
 
-function detectCountry(bio) {
-  if (bio.includes('france') || bio.includes('français') || bio.includes('paris')) return '🇫🇷';
-  if (bio.includes('españa') || bio.includes('madrid') || bio.includes('barcelona')) return '🇪🇸';
-  if (bio.includes('italia') || bio.includes('rome') || bio.includes('milan')) return '🇮🇹';
-  if (bio.includes('uk') || bio.includes('london') || bio.includes('england')) return '🇬🇧';
-  if (bio.includes('maroc') || bio.includes('morocco')) return '🇲🇦';
-  if (bio.includes('algerie') || bio.includes('algeria')) return '🇩🇿';
+function detectCountry(text) {
+  if (text.includes('france') || text.includes('français') || text.includes('paris')) return '🇫🇷';
+  if (text.includes('españa') || text.includes('madrid') || text.includes('barcelona') || text.includes('español')) return '🇪🇸';
+  if (text.includes('italia') || text.includes('rome') || text.includes('milan') || text.includes('italiano')) return '🇮🇹';
+  if (text.includes('uk') || text.includes('london') || text.includes('england')) return '🇬🇧';
+  if (text.includes('maroc') || text.includes('morocco')) return '🇲🇦';
+  if (text.includes('algerie') || text.includes('algeria')) return '🇩🇿';
   return '🌍';
 }
