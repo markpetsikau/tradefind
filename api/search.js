@@ -7,40 +7,19 @@ export default async function handler(req, res) {
 
   const APIFY_KEY = process.env.APIFY_KEY;
   const { count = 30 } = req.body || {};
-  if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
   try {
-    // Get results from the LAST successful run directly — no waiting
+    // Use existing dataset directly - no new run needed
     const dataRes = await fetch(
-      `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/last/dataset/items?limit=500&status=SUCCEEDED`,
+      'https://api.apify.com/v2/datasets/XBjqa0LdpMdTWPfxD/items?limit=500',
       { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
     );
 
-    if (!dataRes.ok) throw new Error('Impossible de récupérer les données: ' + dataRes.status);
+    if (!dataRes.ok) throw new Error('Erreur dataset: ' + dataRes.status);
 
     const items = await dataRes.json();
     const arr = Array.isArray(items) ? items : [];
 
-    if (arr.length === 0) {
-      // Launch a new run in background and return message
-      fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
-        body: JSON.stringify({
-          hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'apextrader', 'propfirmtrader', 'fundedaccount', 'tradingchallenge', 'myfundedtrader', 'e8funding'],
-          resultsLimit: 150,
-          proxy: { useApifyProxy: true }
-        })
-      }).catch(() => {});
-
-      return res.status(200).json({
-        profiles: [],
-        total: 0,
-        message: 'Première recherche en cours (2-3 min) — relance dans quelques minutes'
-      });
-    }
-
-    // Process results
     const seen = new Set();
     const profiles = [];
 
@@ -58,7 +37,7 @@ export default async function handler(req, res) {
 
       let score = 60;
       if (hasTg) score += 20;
-      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded')) score += 15;
+      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded') || captionLow.includes('propfirm') || captionLow.includes('prop firm')) score += 15;
       if (captionLow.includes('signal') || captionLow.includes('formation')) score += 5;
       score = Math.min(score, 99);
 
@@ -75,17 +54,6 @@ export default async function handler(req, res) {
 
       if (profiles.length >= count) break;
     }
-
-    // Also launch new run in background to refresh data
-    fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
-      body: JSON.stringify({
-        hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'apextrader', 'propfirmtrader', 'fundedaccount', 'tradingchallenge', 'myfundedtrader', 'e8funding'],
-        resultsLimit: 150,
-        proxy: { useApifyProxy: true }
-      })
-    }).catch(() => {});
 
     profiles.sort((a, b) => b.score - a.score);
     return res.status(200).json({ profiles, total: profiles.length });
