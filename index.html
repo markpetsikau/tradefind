@@ -275,58 +275,56 @@ async function startSearch() {
   results = [];
   setProgress(0);
 
-  const type = document.getElementById('f_type').value;
-  const minF = parseInt(document.getElementById('f_min').value);
-  const maxF = parseInt(document.getElementById('f_max').value);
   const count = parseInt(document.getElementById('f_count').value);
-  const needTg = document.getElementById('c_tg').classList.contains('on');
-  const countries = [...document.querySelectorAll('#countries .chip.on')].map(c => c.dataset.val);
-
-  log(`Recherche : "${type}" — objectif ${count} profils`, 'info');
-  log(`Pays : ${countries.join(', ')}`, 'info');
+  log('Lancement de la recherche Instagram...', 'info');
+  setProgress(10);
 
   try {
-    const res = await fetch('/api/search', {
+    // Start run
+    const startRes = await fetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, minFollowers: minF, maxFollowers: maxF, count, needTelegram: needTg, countries })
+      body: JSON.stringify({ count })
     });
+    const startData = await startRes.json();
+    if (startData.error) throw new Error(startData.error);
 
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Erreur serveur');
-    }
+    const runId = startData.runId;
+    log('Scraping Instagram lancé — patiente 1-2 min...', 'ok');
+    setProgress(20);
 
-    // Stream progress logs
-    const reader = res.body ? res.body.getReader() : null;
-    const data = await res.json().catch(() => null) || await res.json();
-    
-    setProgress(100);
-    log(`✅ ${data.profiles?.length || 0} influenceurs trouvés !`, 'ok');
-    results = data.profiles || [];
-    renderResults();
+    // Poll every 5 seconds
+    let attempts = 0;
+    while (attempts < 30) {
+      await new Promise(r => setTimeout(r, 5000));
+      attempts++;
+      setProgress(Math.min(20 + attempts * 3, 90));
+      log('Récupération des données... (' + (attempts * 5) + 's)', '');
 
-  } catch(e) {
-    // If streaming doesn't work, try direct
-    log('Connexion au serveur...', 'info');
-    setProgress(30);
-    
-    try {
-      const res2 = await fetch('/api/search', {
+      const pollRes = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, minFollowers: minF, maxFollowers: maxF, count, needTelegram: needTg, countries })
+        body: JSON.stringify({ count, runId })
       });
-      const data = await res2.json();
-      if (data.error) throw new Error(data.error);
-      results = data.profiles || [];
-      setProgress(100);
-      log(`✅ ${results.length} influenceurs trouvés !`, 'ok');
-      renderResults();
-    } catch(e2) {
-      showError('Erreur : ' + e2.message);
-      document.getElementById('progressBox').style.display = 'none';
+      const pollData = await pollRes.json();
+      if (pollData.error) throw new Error(pollData.error);
+
+      if (pollData.status === 'DONE') {
+        results = pollData.profiles || [];
+        setProgress(100);
+        log('✅ ' + results.length + ' influenceurs trouvés !', 'ok');
+        renderResults();
+        break;
+      }
     }
+
+    if (results.length === 0 && attempts >= 30) {
+      throw new Error('Timeout — réessaie dans quelques secondes');
+    }
+
+  } catch(e) {
+    showError('Erreur : ' + e.message);
+    document.getElementById('progressBox').style.display = 'none';
   }
 
   document.getElementById('searchBtn').disabled = false;
