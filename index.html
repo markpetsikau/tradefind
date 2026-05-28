@@ -276,52 +276,21 @@ async function startSearch() {
   setProgress(0);
 
   const count = parseInt(document.getElementById('f_count').value);
-  log('Lancement de la recherche Instagram...', 'info');
-  setProgress(10);
+  log('Recherche en cours...', 'info');
+  setProgress(50);
 
   try {
-    // Start run
-    const startRes = await fetch('/api/search', {
+    const res = await fetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ count })
     });
-    const startData = await startRes.json();
-    if (startData.error) throw new Error(startData.error);
-
-    const runId = startData.runId;
-    log('Scraping Instagram lancé — patiente 1-2 min...', 'ok');
-    setProgress(20);
-
-    // Poll every 5 seconds
-    let attempts = 0;
-    while (attempts < 30) {
-      await new Promise(r => setTimeout(r, 5000));
-      attempts++;
-      setProgress(Math.min(20 + attempts * 3, 90));
-      log('Récupération des données... (' + (attempts * 5) + 's)', '');
-
-      const pollRes = await fetch('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count, runId })
-      });
-      const pollData = await pollRes.json();
-      if (pollData.error) throw new Error(pollData.error);
-
-      if (pollData.status === 'DONE') {
-        results = pollData.profiles || [];
-        setProgress(100);
-        log('✅ ' + results.length + ' influenceurs trouvés !', 'ok');
-        renderResults();
-        break;
-      }
-    }
-
-    if (results.length === 0 && attempts >= 30) {
-      throw new Error('Timeout — réessaie dans quelques secondes');
-    }
-
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    results = data.profiles || [];
+    setProgress(100);
+    log('✅ ' + results.length + ' influenceurs trouvés !', 'ok');
+    renderResults();
   } catch(e) {
     showError('Erreur : ' + e.message);
     document.getElementById('progressBox').style.display = 'none';
