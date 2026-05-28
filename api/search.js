@@ -7,15 +7,47 @@ export default async function handler(req, res) {
 
   const APIFY_KEY = process.env.APIFY_KEY;
   const { count = 30 } = req.body || {};
+  if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
   try {
-    // Use existing dataset directly - no new run needed
+    // Start new run
+    const runRes = await fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
+      body: JSON.stringify({
+        hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'propfirmtrader', 'fundedaccount', 'apextrader', 'tradingchallenge', 'myfundedtrader'],
+        resultsLimit: 150,
+        proxy: { useApifyProxy: true }
+      })
+    });
+
+    if (!runRes.ok) {
+      const err = await runRes.text();
+      throw new Error('Erreur run: ' + err);
+    }
+
+    const runData = await runRes.json();
+    const runId = runData.data?.id;
+    if (!runId) throw new Error('Pas de run ID');
+
+    // Wait max 55 seconds (Vercel limit is 60s)
+    let status = 'RUNNING';
+    let attempts = 0;
+    while (status === 'RUNNING' && attempts < 18) {
+      await new Promise(r => setTimeout(r, 3000));
+      attempts++;
+      const s = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
+        headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
+      });
+      const sd = await s.json();
+      status = sd.data?.status || 'FAILED';
+    }
+
+    // Get results regardless of status
     const dataRes = await fetch(
-      'https://api.apify.com/v2/datasets/XBjqa0LdpMdTWPfxD/items?limit=500',
+      `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`,
       { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
     );
-
-    if (!dataRes.ok) throw new Error('Erreur dataset: ' + dataRes.status);
 
     const items = await dataRes.json();
     const arr = Array.isArray(items) ? items : [];
@@ -37,8 +69,7 @@ export default async function handler(req, res) {
 
       let score = 60;
       if (hasTg) score += 20;
-      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded') || captionLow.includes('propfirm') || captionLow.includes('prop firm')) score += 15;
-      if (captionLow.includes('signal') || captionLow.includes('formation')) score += 5;
+      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded') || captionLow.includes('propfirm')) score += 15;
       score = Math.min(score, 99);
 
       profiles.push({
@@ -56,7 +87,7 @@ export default async function handler(req, res) {
     }
 
     profiles.sort((a, b) => b.score - a.score);
-    return res.status(200).json({ profiles, total: profiles.length });
+    return res.status(200).json({ profiles, total: profiles.length, runId });
 
   } catch(err) {
     console.error(err.message);
