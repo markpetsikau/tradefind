@@ -6,93 +6,88 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const APIFY_KEY = process.env.APIFY_KEY;
-  const { count = 30 } = req.body || {};
+  const { count = 30, runId } = req.body || {};
   if (!APIFY_KEY) return res.status(500).json({ error: 'Clé Apify manquante' });
 
+  // If runId provided, fetch results from existing run
+  if (runId) {
+    try {
+      const statusRes = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`,
+        { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
+      );
+      const statusData = await statusRes.json();
+      const status = statusData.data?.status;
+
+      if (status === 'RUNNING' || status === 'READY') {
+        return res.status(200).json({ status: 'RUNNING', runId });
+      }
+
+      // Get results
+      const dataRes = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`,
+        { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
+      );
+      const items = await dataRes.json();
+      const profiles = processItems(Array.isArray(items) ? items : [], count);
+      return res.status(200).json({ status: 'DONE', profiles, total: profiles.length });
+
+    } catch(err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Start new run
   try {
-    // Start new run
     const runRes = await fetch('https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APIFY_KEY}` },
       body: JSON.stringify({
-        hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'propfirmtrader', 'fundedaccount', 'apextrader', 'tradingchallenge', 'myfundedtrader'],
+        hashtags: ['fundedtrader', 'propfirm', 'ftmo', 'propfirmtrader', 'fundedaccount', 'apextrader', 'tradingchallenge'],
         resultsLimit: 150,
         proxy: { useApifyProxy: true }
       })
     });
 
-    if (!runRes.ok) {
-      const err = await runRes.text();
-      throw new Error('Erreur run: ' + err);
-    }
-
     const runData = await runRes.json();
-    const runId = runData.data?.id;
-    if (!runId) throw new Error('Pas de run ID');
+    const newRunId = runData.data?.id;
+    if (!newRunId) throw new Error('Pas de run ID');
 
-    // Wait max 55 seconds (Vercel limit is 60s)
-    let status = 'RUNNING';
-    let attempts = 0;
-    while (status === 'RUNNING' && attempts < 18) {
-      await new Promise(r => setTimeout(r, 3000));
-      attempts++;
-      const s = await fetch(`https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}`, {
-        headers: { 'Authorization': `Bearer ${APIFY_KEY}` }
-      });
-      const sd = await s.json();
-      status = sd.data?.status || 'FAILED';
-    }
-
-    // Get results regardless of status
-    const dataRes = await fetch(
-      `https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/runs/${runId}/dataset/items?limit=500`,
-      { headers: { 'Authorization': `Bearer ${APIFY_KEY}` } }
-    );
-
-    const items = await dataRes.json();
-    const arr = Array.isArray(items) ? items : [];
-
-    const seen = new Set();
-    const profiles = [];
-
-    for (const item of arr) {
-      if (!item) continue;
-      const username = item.ownerUsername || item.owner?.username;
-      const fullName = item.ownerFullName || item.owner?.fullName || '';
-      if (!username || seen.has(username)) continue;
-      seen.add(username);
-
-      const caption = item.caption || item.text || '';
-      const captionLow = caption.toLowerCase();
-      const tgMatch = caption.match(/t\.me\/[\w]+/i);
-      const hasTg = !!(tgMatch || captionLow.includes('telegram'));
-
-      let score = 60;
-      if (hasTg) score += 20;
-      if (captionLow.includes('xfunded') || captionLow.includes('ftmo') || captionLow.includes('funded') || captionLow.includes('propfirm')) score += 15;
-      score = Math.min(score, 99);
-
-      profiles.push({
-        username,
-        fullName,
-        followers: item.ownerFollowersCount || 0,
-        country: detectCountry(captionLow + ' ' + fullName.toLowerCase()),
-        hasTelegram: hasTg,
-        telegramLink: tgMatch ? tgMatch[0] : null,
-        hasReels: true,
-        score
-      });
-
-      if (profiles.length >= count) break;
-    }
-
-    profiles.sort((a, b) => b.score - a.score);
-    return res.status(200).json({ profiles, total: profiles.length, runId });
+    return res.status(200).json({ status: 'STARTED', runId: newRunId });
 
   } catch(err) {
-    console.error(err.message);
     return res.status(500).json({ error: err.message });
   }
+}
+
+function processItems(arr, count) {
+  const seen = new Set();
+  const profiles = [];
+  for (const item of arr) {
+    if (!item) continue;
+    const username = item.ownerUsername || item.owner?.username;
+    const fullName = item.ownerFullName || item.owner?.fullName || '';
+    if (!username || seen.has(username)) continue;
+    seen.add(username);
+    const caption = item.caption || item.text || '';
+    const captionLow = caption.toLowerCase();
+    const tgMatch = caption.match(/t\.me\/[\w]+/i);
+    const hasTg = !!(tgMatch || captionLow.includes('telegram'));
+    let score = 60;
+    if (hasTg) score += 20;
+    if (captionLow.includes('ftmo') || captionLow.includes('funded') || captionLow.includes('propfirm') || captionLow.includes('prop firm')) score += 15;
+    score = Math.min(score, 99);
+    profiles.push({
+      username, fullName,
+      followers: item.ownerFollowersCount || 0,
+      country: detectCountry(captionLow + ' ' + fullName.toLowerCase()),
+      hasTelegram: hasTg,
+      telegramLink: tgMatch ? tgMatch[0] : null,
+      hasReels: true, score
+    });
+    if (profiles.length >= count) break;
+  }
+  return profiles.sort((a, b) => b.score - a.score);
 }
 
 function detectCountry(text) {
