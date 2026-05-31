@@ -276,6 +276,9 @@ async function startSearch() {
   setProgress(0);
 
   const count = parseInt(document.getElementById('f_count').value);
+  const minFollowers = parseInt(document.getElementById('f_min').value);
+  const maxFollowers = parseInt(document.getElementById('f_max').value);
+  const needTg = document.getElementById('c_tg').classList.contains('on');
   log('Recherche en cours...', 'info');
   setProgress(50);
 
@@ -283,7 +286,7 @@ async function startSearch() {
     const res = await fetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count })
+      body: JSON.stringify({ count, minFollowers, maxFollowers, needTelegram: needTg })
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
