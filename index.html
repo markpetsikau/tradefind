@@ -277,8 +277,8 @@ async function startSearch() {
   setProgress(0);
 
   const count = parseInt(document.getElementById('f_count').value);
-  const minFollowers = parseInt(document.getElementById('f_min').value);
-  const maxFollowers = parseInt(document.getElementById('f_max').value);
+  const minFollowers = parseInt(document.getElementById('f_min').value) || 0;
+  const maxFollowers = parseInt(document.getElementById('f_max').value) || 999999999;
   const needTg = document.getElementById('c_tg').classList.contains('on');
   log('Recherche en cours...', 'info');
   setProgress(50);
