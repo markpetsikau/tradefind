@@ -63,6 +63,7 @@ export default async function handler(req, res) {
         score
       });
 
+      if (followers === 0) continue; // Skip accounts without follower data
       if (profiles.length >= count) break;
     }
 
